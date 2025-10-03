@@ -30,6 +30,7 @@ import (
     "github.com/phillarmonic/SoloDB"
 )
 
+
 func main() {
     // Open database
     db, err := solodb.Open(solodb.Options{
