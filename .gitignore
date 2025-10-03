@@ -74,3 +74,13 @@ solodb
 soloDB
 SoloDB
 spec
+
+# SoloDB database files
+*.solo
+*.compact
+
+# Example binaries
+example/basic/main
+example/expiration/main
+example/basic/basic
+example/expiration/expiration
