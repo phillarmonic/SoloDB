@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -369,13 +370,13 @@ func (db *DB) Compact() error {
 // compactInternal performs the actual compaction (must be called with lock held or during initialization)
 func (db *DB) compactInternal() error {
 	compactPath := db.opts.Path + ".compact"
+	backupPath := db.opts.Path + ".bak"
 
 	// Create temp compaction file
 	compactFile, err := os.OpenFile(compactPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("solodb: failed to create compact file: %w", err)
 	}
-	defer func() { _ = compactFile.Close() }()
 
 	// Write header
 	h := header{
@@ -440,7 +441,14 @@ func (db *DB) compactInternal() error {
 
 	// Sync compact file
 	if err := compactFile.Sync(); err != nil {
+		_ = compactFile.Close()
 		return err
+	}
+
+	// Windows keeps the handle locked until we close it, so the compact file
+	// must be closed before we can replace the original database file.
+	if err := compactFile.Close(); err != nil {
+		return fmt.Errorf("solodb: failed to close compact file: %w", err)
 	}
 
 	// Close current file
@@ -448,9 +456,21 @@ func (db *DB) compactInternal() error {
 		return err
 	}
 
-	// Atomic rename
-	if err := os.Rename(compactPath, db.opts.Path); err != nil {
-		return fmt.Errorf("solodb: failed to rename compact file: %w", err)
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(backupPath)
+		if err := os.Rename(db.opts.Path, backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("solodb: failed to move original file aside: %w", err)
+		}
+		if err := os.Rename(compactPath, db.opts.Path); err != nil {
+			_ = os.Rename(backupPath, db.opts.Path)
+			return fmt.Errorf("solodb: failed to rename compact file: %w", err)
+		}
+		_ = os.Remove(backupPath)
+	} else {
+		// Atomic rename on platforms that support replacing the destination.
+		if err := os.Rename(compactPath, db.opts.Path); err != nil {
+			return fmt.Errorf("solodb: failed to rename compact file: %w", err)
+		}
 	}
 
 	// Reopen file
